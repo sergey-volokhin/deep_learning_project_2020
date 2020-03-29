@@ -36,11 +36,12 @@ def new_features_similarity(movie1_row, movie2_row):
     #     raise
     # people_score = jaccard_score(movie1_row[2 + amount_genres:2 + amount_genres + amount_people], movie2_row[2 + amount_genres:2 + amount_genres + amount_people])
     # restriction_score = jaccard_score(movie1_row[-amount_restrictions:], movie2_row[-amount_restrictions:])
-    genres_score = cosine_similarity(movie1_row[2:2 + amount_genres].reshape(1, -1), movie2_row[2:2 + amount_genres].reshape(1, -1))
-    people_score = cosine_similarity(movie1_row[2 + amount_genres:2 + amount_genres + amount_people].reshape(1, -1), movie2_row[2 + amount_genres:2 + amount_genres + amount_people].reshape(1, -1))
-    restriction_score = cosine_similarity(movie1_row[-amount_restrictions:].reshape(1, -1), movie2_row[-amount_restrictions:].reshape(1, -1))
-    return critics_score * critics_coef + audience_score * audience_coef + genres_score * genres_coef + people_score * people_coef + restriction_coef * restriction_score
-    # return 1 - (critics_score * critics_coef + audience_score * audience_coef + genres_score * genres_coef + people_score * people_coef + restriction_coef * restriction_score)
+    genres_score = cosine_similarity(movie1_row[2:2 + amount_genres].reshape(1, -1), movie2_row[2:2 + amount_genres].reshape(1, -1))[0][0]
+    # print(genres_score)
+    people_score = cosine_similarity(movie1_row[2 + amount_genres:2 + amount_genres + amount_people].reshape(1, -1), movie2_row[2 + amount_genres:2 + amount_genres + amount_people].reshape(1, -1))[0][0]
+    restriction_score = cosine_similarity(movie1_row[-amount_restrictions:].reshape(1, -1), movie2_row[-amount_restrictions:].reshape(1, -1))[0][0]
+    # return critics_score * critics_coef + audience_score * audience_coef + genres_score * genres_coef + people_score * people_coef + restriction_coef * restriction_score
+    return 1 - (critics_score * critics_coef + audience_score * audience_coef + genres_score * genres_coef + people_score * people_coef + restriction_coef * restriction_score)
 
 
 def custom_similarity(movie1_row, movie2_row):
@@ -48,7 +49,7 @@ def custom_similarity(movie1_row, movie2_row):
     # print(movie1_row)
     # print(movie2_row)
     # print(amount_critics, movie1_row[amount_critics:].shape, movie2_row[amount_critics:].shape)
-    alpha = 0
+    alpha = 0.5
     correlation = 1 - pearsonr(movie1_row[:amount_critics], movie2_row[:amount_critics])[0]
     custom_sim = new_features_similarity(movie1_row[amount_critics:], movie2_row[amount_critics:])
     return alpha * correlation + (1 - alpha) * custom_sim
@@ -99,7 +100,7 @@ class OurCF:
             r_uj = working_series[j]
             if r_uj == 0:
                 continue
-            sim_ij = custom_similarity(j_series, subdf)
+            sim_ij = custom_similarity(j_series.to_numpy(), subdf.to_numpy())
             numerator += sim_ij * (r_uj - mu_j)
             denominator += sim_ij
 
@@ -114,8 +115,9 @@ class OurCF:
         user_df = self.dataset[user_id]
         top_ranked_movies = user_df[user_df == user_df.max()].index
         for movie in top_ranked_movies:
-            movie_neighbors = self.NN.kneighbors([self.dataset.loc[movie]], n_neighbors=3)  # 3 is a magic number
+            movie_neighbors = self.NN.kneighbors([self.dataset.loc[movie]], n_neighbors=5)  # 3 is a magic number
             movies_pool.update(set(self.dataset.iloc[movie_neighbors[1][0][1:]].index))
+        movies_pool = [movie for movie in movies_pool if movie not in top_ranked_movies]
         neighbors = 'all'
         for movie_id in tqdm(movies_pool):
             scored_list.append((movie_id, self.get_score(user_id, movie_id, neighbors)))
