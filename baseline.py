@@ -1,33 +1,57 @@
 import argparse
 import json
+import sys
+from pprint import pprint
 
-from tqdm import tqdm
-
+import numpy as np
 import pandas as pd
 from scipy.stats import pearsonr
 from sklearn.metrics import jaccard_score
+from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.neighbors import NearestNeighbors as NN
+from tqdm import tqdm
+
+np.set_printoptions(threshold=sys.maxsize)
 
 
-def new_features_similarity(movie1_id, movie2_id):
+amount_restrictions = 6
+amount_people = 491
+amount_genres = 23
+
+
+def new_features_similarity(movie1_row, movie2_row):
     genres_coef = 0.5
     people_coef = 0.3
     critics_coef = audience_coef = (1 - genres_coef - people_coef) / 2
+    restriction_coef = 0
 
-    first_feats = features[movie1_id]
-    second_feats = features[movie2_id]
-    critics_score = 1 - abs(first_feats['critic_score'] - second_feats['critic_score'])
-    audience_score = 1 - abs(first_feats['audience_score'] - second_feats['audience_score'])
-    genres_score = jaccard_score(first_feats['genre'], second_feats['genre'])
-    people_score = jaccard_score(first_feats['people'], second_feats['people'])
-    return critics_score * critics_coef + audience_score * audience_coef + genres_score * genres_coef + people_score * people_coef
+    critics_score = 1 - abs(movie1_row[0] - movie2_row[0]) / 100
+    audience_score = 1 - abs(movie1_row[1] - movie2_row[1]) / 100
+    # try:
+    #     genres_score = jaccard_score(movie1_row[2:2 + amount_genres], movie2_row[2:2 + amount_genres])
+    #     print(movie1_row[2:2 + amount_genres], movie2_row[2:2 + amount_genres])
+    #     print('genres score', genres_score)
+    # except:
+    #     print(movie1_row[2:2 + amount_genres], movie2_row[2:2 + amount_genres])
+    #     raise
+    # people_score = jaccard_score(movie1_row[2 + amount_genres:2 + amount_genres + amount_people], movie2_row[2 + amount_genres:2 + amount_genres + amount_people])
+    # restriction_score = jaccard_score(movie1_row[-amount_restrictions:], movie2_row[-amount_restrictions:])
+    genres_score = cosine_similarity(movie1_row[2:2 + amount_genres].reshape(1, -1), movie2_row[2:2 + amount_genres].reshape(1, -1))
+    people_score = cosine_similarity(movie1_row[2 + amount_genres:2 + amount_genres + amount_people].reshape(1, -1), movie2_row[2 + amount_genres:2 + amount_genres + amount_people].reshape(1, -1))
+    restriction_score = cosine_similarity(movie1_row[-amount_restrictions:].reshape(1, -1), movie2_row[-amount_restrictions:].reshape(1, -1))
+    return critics_score * critics_coef + audience_score * audience_coef + genres_score * genres_coef + people_score * people_coef + restriction_coef * restriction_score
+    # return 1 - (critics_score * critics_coef + audience_score * audience_coef + genres_score * genres_coef + people_score * people_coef + restriction_coef * restriction_score)
 
 
 def custom_similarity(movie1_row, movie2_row):
-    alpha = 1
-    correlation = alpha * pearsonr(movie1_row, movie2_row)[0]
-    custom_sim = (1 - alpha) * new_features_similarity(movie1_row['movie_id'], movie2_row['movie_id'])
-    return correlation + custom_sim
+    # print(movie1_row.shape, movie2_row.shape)
+    # print(movie1_row)
+    # print(movie2_row)
+    # print(amount_critics, movie1_row[amount_critics:].shape, movie2_row[amount_critics:].shape)
+    alpha = 0
+    correlation = 1 - pearsonr(movie1_row[:amount_critics], movie2_row[:amount_critics])[0]
+    custom_sim = new_features_similarity(movie1_row[amount_critics:], movie2_row[amount_critics:])
+    return alpha * correlation + (1 - alpha) * custom_sim
 
 
 class OurCF:
@@ -43,9 +67,7 @@ class OurCF:
             constructs the NN model with correlation distance
         '''
 
-        index_on = 'movie_id'
-        columns = 'critic_id'
-        self.dataset = df.pivot(index=index_on, columns=columns, values='score').fillna(0)
+        self.dataset = df
         self.NN.fit(self.dataset)
 
     def get_score(self, user_id, movie_id, neighbors):
@@ -77,8 +99,7 @@ class OurCF:
             r_uj = working_series[j]
             if r_uj == 0:
                 continue
-            # sim_ij = pearsonr(j_series, subdf)[0]
-            sim_ij = custom_similarity(j, movie_id)
+            sim_ij = custom_similarity(j_series, subdf)
             numerator += sim_ij * (r_uj - mu_j)
             denominator += sim_ij
 
@@ -89,7 +110,6 @@ class OurCF:
         """ recommendation function: gets scores for all (or closest to top-ranked by user) movies and ranks them, giving out top k of them """
         scored_list = []
         print('Ranking movies')
-        # if user-based, then get user neighbors and rank every movie for those neigbors
         movies_pool = set()
         user_df = self.dataset[user_id]
         top_ranked_movies = user_df[user_df == user_df.max()].index
@@ -113,9 +133,10 @@ if __name__ == '__main__':
     model = OurCF()
 
     print('\nLoading data')
-    path = ''
-    df_reviews = pd.read_csv(path + 'reviews_clean.tsv', sep='\t')[['movie_id', 'critic_id', 'score']]
-    features = json.load(open(path + 'films_features.json'))
+    df_reviews = pd.read_csv('reviews_clean.tsv', sep='\t')[['movie_id', 'critic_id', 'score']].drop_duplicates(subset=['movie_id', 'critic_id'])
+    features = json.load(open('films_features.json'))
+    one_hot_encoded_features = pd.read_csv('film_features.tsv', sep='\t').set_index('movie_id', drop=True)
+
     popularity_thres = 50
     df_new = df_reviews.copy()
 
@@ -154,11 +175,14 @@ if __name__ == '__main__':
                        {'movie_id': 'avengers_infinity_war', 'critic_id': 'test_user', 'score': 5},
                        {'movie_id': 'avengers_endgame', 'critic_id': 'test_user', 'score': 5}])
 
-    df_new = df_new.append(me).reset_index(drop=True)
-
+    df_new = df_new.append(me).reset_index(drop=True).pivot(index='movie_id', columns='critic_id', values='score').fillna(0)
+    amount_critics = df_new.shape[1]
+    final_df = pd.merge(df_new, one_hot_encoded_features, left_index=True, right_index=True).astype(int)
     print('Data loaded\n')
 
-    model.fit(df_new)
+    # print(custom_similarity(final_df.loc['trollhunter'].to_numpy(), final_df.loc['avengers_endgame'].to_numpy()))
+    # print(custom_similarity(final_df.loc['0814255'].to_numpy(), final_df.loc['avengers_endgame'].to_numpy()))
+    model.fit(final_df)
 
     critic = 'test_user'
     recommendations = enumerate(model.recommend(critic, args.amount_recommendations))
